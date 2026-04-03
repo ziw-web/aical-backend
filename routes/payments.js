@@ -403,7 +403,7 @@ router.post('/dodopayments/create-checkout', auth, async (req, res) => {
                 userId: req.user._id.toString(),
                 planId: plan._id.toString()
             },
-            return_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/settings?status=success&gateway=dodopayments&planId=${planId}`
+            return_url: `${process.env.CLIENT_URL}/settings?status=success&gateway=dodopayments&planId=${planId}`
         });
 
         res.status(200).json({ status: 'success', data: { url: session.checkout_url } });
@@ -434,11 +434,12 @@ router.get('/dodopayments/verify-session', auth, async (req, res) => {
             planExpiry: expiryDate
         });
 
+        const adminSettings = await AdminSettings.findOne();
         await Purchase.create({
             user: req.user._id,
             plan: planId,
             amount: plan.price,
-            currency: adminSettings.currency || 'USD', // fallback or fetch from session if possible
+            currency: adminSettings?.currency || 'USD', // fallback or fetch from session if possible
             paymentGateway: 'dodopayments',
             paymentId: sessionId || `dodo_${Date.now()}`,
             status: 'completed'

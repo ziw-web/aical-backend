@@ -32,9 +32,6 @@ const leadSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Add compound unique index to prevent duplicates
-leadSchema.index({ phone: 1, createdBy: 1 }, { unique: true });
-
 // Pre-save hook to normalize phone number
 leadSchema.pre('save', function () {
     if (this.phone) {

@@ -71,29 +71,17 @@ async function initialize() {
 /**
  * Originate an outbound call through a SIP trunk
  */
-async function originateCall(trunkId, destination, metadata = {}) {
+async function originateCall(trunkId, destination, trunkHost, metadata = {}) {
     if (!connected) throw new Error('Asterisk ARI not connected');
 
     const endpointName = `trunk-${trunkId}`;
-    
-    // Format: PJSIP/<endpoint>/<sip_uri>
-    // The destination should be formatted as sip:number@server for proper SIP URI
-    // Clean the destination number (remove any existing formatting)
-    const cleanNumber = destination.replace(/[^\d+]/g, '');
-    
-    // Use the PJSIP/endpoint/number format - Asterisk will route via the AOR
-    const dialString = `PJSIP/${cleanNumber}@${endpointName}`;
-    console.log(`[ARI] Originating call to: ${dialString}`);
 
-    // Pre-flight: check if endpoint is loaded in Asterisk
-    try {
-        const epDetail = await ari.endpoints.get({ tech: 'PJSIP', resource: endpointName });
-        console.log(`[ARI] Endpoint ${endpointName} state: ${epDetail.state || 'unknown'}`);
-    } catch (epErr) {
-        console.error(`❌ [ARI] Endpoint ${endpointName} NOT found in Asterisk. Details:`, epErr.message);
-        console.error(`[ARI] Hint: Run "asterisk -rx 'pjsip show endpoints'" on your server to verify.`);
-        throw new Error(`SIP endpoint not found: ${endpointName}. Ensure Asterisk configs are regenerated and reloaded.`);
-    }
+    // Format: PJSIP/number@endpoint
+    // This is the most universal format for Twilio, Telnyx, and Vobiz.
+    const cleanNumber = destination.replace(/[^\d+]/g, '');
+    const dialString = `PJSIP/${cleanNumber}@${endpointName}`;
+
+    console.log(`[ARI] Originating call to: ${dialString}`);
 
     try {
         const channel = ari.Channel();

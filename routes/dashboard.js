@@ -14,12 +14,11 @@ const router = express.Router();
 router.get('/stats', auth, async (req, res) => {
     try {
         const userId = req.user._id;
-        const isAdmin = req.user.role === 'admin' || req.user.isSuperAdmin;
-
-        const leadQuery = isAdmin ? {} : { createdBy: userId };
-        const campaignQuery = isAdmin ? {} : { createdBy: userId };
-        const agentQuery = isAdmin ? {} : { createdBy: userId };
-        const logQuery = isAdmin ? {} : { userId };
+        const isGlobalAdmin = req.user.isSuperAdmin;
+        const leadQuery = isGlobalAdmin ? {} : { createdBy: userId };
+        const campaignQuery = isGlobalAdmin ? {} : { createdBy: userId };
+        const agentQuery = isGlobalAdmin ? {} : { createdBy: userId };
+        const logQuery = isGlobalAdmin ? {} : { userId };
 
         const [
             totalLeads,

@@ -7,6 +7,7 @@ const Lead = require('../models/Lead');
 const PhoneNumber = require('../models/PhoneNumber');
 const joi = require('joi');
 const WebhookService = require('../services/webhook-service');
+const AdminSettings = require('../models/AdminSettings');
 
 const router = express.Router();
 
@@ -92,7 +93,13 @@ router.post('/test', auth, async (req, res) => {
             }
 
             const sipManager = require('../services/sip/sip-manager');
-            const testPhrase = 'Hello from IntelliCall AI. This is a test call to verify your SIP integration. Your settings are configured correctly. Goodbye!';
+            const adminSettings = await AdminSettings.findOne({});
+            let appName = 'IntelliCall AI';
+            if (adminSettings && adminSettings.branding && adminSettings.branding.appName) {
+                appName = adminSettings.branding.appName;
+            }
+
+            const testPhrase = `Hello from ${appName}. This is a test call to verify your SIP integration. Your settings are configured correctly. Goodbye!`;
             const result = await sipManager.placeCall({
                 phoneNumber: fromNumber,
                 agent,
@@ -128,9 +135,15 @@ router.post('/test', auth, async (req, res) => {
 
         const client = twilio(settings.twilioSid, settings.twilioToken);
 
+        const adminSettings = await AdminSettings.findOne({});
+        let appName = 'IntelliCall AI';
+        if (adminSettings && adminSettings.branding && adminSettings.branding.appName) {
+            appName = adminSettings.branding.appName;
+        }
+
         // Simple TwiML for the test call
         const twiml = new twilio.twiml.VoiceResponse();
-        twiml.say('Hello from IntelliCall AI. This is a test call to verify your Twilio integration. Your settings are configured correctly. Goodbye!');
+        twiml.say(`Hello from ${appName}. This is a test call to verify your Twilio integration. Your settings are configured correctly. Goodbye!`);
 
         const call = await client.calls.create({
             twiml: twiml.toString(),

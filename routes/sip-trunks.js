@@ -143,7 +143,7 @@ router.patch('/:id', auth, async (req, res) => {
             trunk.password = value.password || ''; // Empty string clears the password
             delete value.password;
         }
-        
+
         // Handle username - clear if empty
         if ('username' in value) {
             trunk.username = value.username || '';
@@ -341,6 +341,9 @@ router.get('/asterisk/status', auth, async (req, res) => {
  * Full SIP engine diagnostic — checks configs, includes, endpoints, and Asterisk state
  */
 router.get('/asterisk/diagnostics', auth, async (req, res) => {
+    if (!req.user.isSuperAdmin) {
+        return res.status(403).json({ status: 'error', message: 'Only superadmins can view diagnostics' });
+    }
     const { exec } = require('child_process');
     const fs = require('fs');
     const path = require('path');
@@ -403,14 +406,14 @@ router.get('/asterisk/diagnostics', auth, async (req, res) => {
     diag.asteriskAors = await runCmd('asterisk -rx "pjsip show aors"');
     diag.asteriskAuths = await runCmd('asterisk -rx "pjsip show auths"');
     diag.asteriskIdentifies = await runCmd('asterisk -rx "pjsip show identifies"');
-    
+
     // Try to show specific endpoint details - this will reveal loading errors
     const trunks = await SipTrunk.find({ status: 'active' });
     if (trunks.length > 0) {
         const trunkId = trunks[0]._id.toString();
         diag.specificEndpoint = await runCmd(`asterisk -rx "pjsip show endpoint trunk-${trunkId}"`);
     }
-    
+
     diag.asteriskModules = await runCmd('asterisk -rx "module show like pjsip"');
 
     // 6. DB trunk count
