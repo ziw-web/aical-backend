@@ -1,9 +1,12 @@
 const express = require('express');
 const joi = require('joi');
 const Campaign = require('../models/Campaign');
+const Agent = require('../models/Agent');
+const Lead = require('../models/Lead');
 const { auth, requireActivePlan } = require('../middleware/auth');
 const checkLimit = require('../middleware/limit-checker');
 const { runCampaign } = require('../services/campaign-runner');
+const WebhookService = require('../services/webhook-service');
 
 const router = express.Router();
 
@@ -29,7 +32,7 @@ router.post('/duplicate', auth, requireActivePlan, checkLimit('campaigns'), asyn
             : [];
 
         const campaign = new Campaign({
-            name: `${source.name} (Copy)`,  
+            name: `${source.name} (Copy)`,
             agentId,
             leadIds,
             status: 'idle',
@@ -223,6 +226,18 @@ router.post('/', auth, requireActivePlan, checkLimit('campaigns'), async (req, r
 
     try {
         const value = await schema.validateAsync(req.body);
+
+        // Ownership validation
+        const agent = await Agent.findOne({ _id: value.agentId, createdBy: req.user._id });
+        if (!agent) {
+            return res.status(403).json({ status: 'error', message: 'You do not own this agent' });
+        }
+
+        const leadCount = await Lead.countDocuments({ _id: { $in: value.leadIds }, createdBy: req.user._id });
+        if (leadCount !== value.leadIds.length) {
+            return res.status(403).json({ status: 'error', message: 'Some leads are not owned by you' });
+        }
+
         const now = new Date();
         const scheduledAt = value.scheduledAt ? new Date(value.scheduledAt) : null;
         const isScheduled = scheduledAt && scheduledAt > now;
@@ -270,8 +285,20 @@ router.patch('/:id', auth, requireActivePlan, async (req, res) => {
         }
 
         if (value.name !== undefined) campaign.name = value.name;
-        if (value.agentId !== undefined) campaign.agentId = value.agentId;
-        if (value.leadIds !== undefined) campaign.leadIds = value.leadIds;
+        if (value.agentId !== undefined) {
+            const agent = await Agent.findOne({ _id: value.agentId, createdBy: req.user._id });
+            if (!agent) {
+                return res.status(403).json({ status: 'error', message: 'You do not own this agent' });
+            }
+            campaign.agentId = value.agentId;
+        }
+        if (value.leadIds !== undefined) {
+            const leadCount = await Lead.countDocuments({ _id: { $in: value.leadIds }, createdBy: req.user._id });
+            if (leadCount !== value.leadIds.length) {
+                return res.status(403).json({ status: 'error', message: 'Some leads are not owned by you' });
+            }
+            campaign.leadIds = value.leadIds;
+        }
 
         if (value.scheduledAt !== undefined) {
             const scheduledAt = value.scheduledAt ? new Date(value.scheduledAt) : null;

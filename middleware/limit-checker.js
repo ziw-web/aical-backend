@@ -3,20 +3,26 @@ const Campaign = require('../models/Campaign');
 const Lead = require('../models/Lead');
 const CallLog = require('../models/CallLog');
 
+const AdminSettings = require('../models/AdminSettings');
+
 const checkLimit = (type) => async (req, res, next) => {
     try {
         // If superadmin, bypass limits
         if (req.user.isSuperAdmin) return next();
 
         const user = await req.user.populate('plan');
+        let limits;
+
+        let settings;
+
         if (!user.plan) {
-            return res.status(403).json({
-                status: 'error',
-                message: 'No active subscription plan found. Please subscribe to a plan to continue.'
-            });
+            // Fallback to trial limits from AdminSettings
+            settings = await AdminSettings.findOne() || await AdminSettings.create({});
+            limits = settings.trialLimits;
+        } else {
+            limits = user.plan.limits;
         }
 
-        const limits = user.plan.limits;
         const userId = user._id;
 
         if (type === 'agents') {
@@ -52,10 +58,29 @@ const checkLimit = (type) => async (req, res, next) => {
         }
 
         if (type === 'calls') {
-            // No call limits enforced - BYOK (Bring Your Own Keys) model
-            // Users provide their own Twilio, OpenRouter, ElevenLabs, and Deepgram API keys
-            // They pay for their own usage directly to those providers
-            // Platform limits are for agents, campaigns, and lead storage only
+            // Determine allowed calls based purely on per-plan or trial limits
+            const allowedCalls = typeof limits.callsPerMonth === 'number' ? limits.callsPerMonth : null;
+
+            // <= 0 or null means unlimited calls for this plan/trial
+            if (allowedCalls === null || allowedCalls <= 0) {
+                return next();
+            }
+
+            const startOfMonth = new Date();
+            startOfMonth.setDate(1);
+            startOfMonth.setHours(0, 0, 0, 0);
+
+            const currentCalls = await CallLog.countDocuments({
+                userId: userId,
+                createdAt: { $gte: startOfMonth }
+            });
+
+            if (currentCalls >= allowedCalls) {
+                return res.status(403).json({
+                    status: 'error',
+                    message: `You have reached your monthly call limit of ${allowedCalls} calls. Please upgrade your plan or wait until the next billing cycle.`
+                });
+            }
         }
 
         next();

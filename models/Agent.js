@@ -33,6 +33,28 @@ const agentSchema = new mongoose.Schema({
         ref: 'PhoneNumber',
         default: null
     },
+    knowledgeBaseId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'KnowledgeBase',
+        default: null
+    },
+    kbSettings: {
+        useBasicInfo: { type: Boolean, default: true },
+        useFaqs: { type: Boolean, default: true },
+        useOtherInfo: { type: Boolean, default: true }
+    },
+    language: {
+        type: String,
+        default: 'en'
+    },
+    appointmentBookingEnabled: {
+        type: Boolean,
+        default: false
+    },
+    appointmentDescription: {
+        type: String,
+        default: ''
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',

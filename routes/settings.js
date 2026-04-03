@@ -17,6 +17,13 @@ router.get('/public', async (req, res) => {
                 data: {
                     currency: 'USD',
                     supportEmail: 'support@intellicall.ai',
+                    branding: {
+                        appName: 'IntelliCallAI',
+                        primaryColor: '#8078F0',
+                        logoLight: '/images/logo_black.png',
+                        logoDark: '/images/logo_white.png',
+                        favicon: '/favicon.ico'
+                    },
                     gateways: {
                         stripe: false,
                         paypal: false,
@@ -32,6 +39,13 @@ router.get('/public', async (req, res) => {
             data: {
                 currency: settings.currency,
                 supportEmail: settings.supportEmail || 'support@intellicall.ai',
+                branding: {
+                    appName: settings.branding?.appName || 'IntelliCallAI',
+                    primaryColor: settings.branding?.primaryColor || '#8078F0',
+                    logoLight: settings.branding?.logoLight || '/images/logo_black.png',
+                    logoDark: settings.branding?.logoDark || '/images/logo_white.png',
+                    favicon: settings.branding?.favicon || '/favicon.ico'
+                },
                 gateways: {
                     stripe: settings.gateways?.stripe?.enabled || false,
                     stripeTestMode: settings.gateways?.stripe?.testMode ?? true,
@@ -60,13 +74,19 @@ router.get('/config-status', auth, async (req, res) => {
             PhoneNumber.countDocuments({ createdBy: req.user._id })
         ]);
 
+        // Build SIP Origination URI from server config
+        const externalIp = process.env.EXTERNAL_IP || '';
+        const sipPort = parseInt(process.env.IC_SIP_PORT || '5090');
+        const sipOriginationUri = externalIp ? `sip:${externalIp}:${sipPort}` : '';
+
         res.status(200).json({
             status: 'success',
             data: {
                 isTwilioConfigured: !!(settings?.twilioSid && settings?.twilioToken),
                 isElevenLabsConfigured: !!(settings?.elevenLabsKey),
                 isDeepgramConfigured: !!(settings?.deepgramKey),
-                isModelConfigured: !!(settings?.openRouterKey)
+                isModelConfigured: !!(settings?.openRouterKey),
+                sipOriginationUri
             }
         });
     } catch (err) {
@@ -92,8 +112,25 @@ router.get('/', auth, async (req, res) => {
                         outboundCall: true,
                         callCompleted: true,
                         leadCreated: true,
+                        appointmentBooked: true,
+                        appointmentCanceled: true
+                    }
+                },
+                emailNotifications: {
+                    enabled: false,
+                    brevoKey: '',
+                    senderEmail: '',
+                    senderName: '',
+                    recipientEmail: '',
+                    events: {
+                        inboundCall: true,
+                        outboundCall: true,
+                        callCompleted: true,
+                        leadCreated: true,
                         leadQualified: true,
-                        campaignCompleted: true
+                        campaignCompleted: true,
+                        appointmentBooked: true,
+                        appointmentCanceled: true
                     }
                 }
             });
@@ -108,9 +145,9 @@ router.get('/', auth, async (req, res) => {
                 settings.webhooks.secret = `whsec_${crypto.randomBytes(16).toString('hex')}`;
             }
 
-            // Ensure events object and all defaults exist
-            if (!settings.webhooks.events) {
-                settings.webhooks.events = {};
+            // Ensure emailNotifications object exists
+            if (!settings.emailNotifications) {
+                settings.emailNotifications = { enabled: false, brevoKey: '', senderEmail: '', senderName: '', recipientEmail: '', events: {} };
             }
 
             const defaultEvents = {
@@ -119,7 +156,9 @@ router.get('/', auth, async (req, res) => {
                 callCompleted: true,
                 leadCreated: true,
                 leadQualified: true,
-                campaignCompleted: true
+                campaignCompleted: true,
+                appointmentBooked: true,
+                appointmentCanceled: true
             };
 
             // Merge existing events with defaults
@@ -128,8 +167,17 @@ router.get('/', auth, async (req, res) => {
                 ...settings.webhooks.events
             };
 
+            if (!settings.emailNotifications.events) {
+                settings.emailNotifications.events = {};
+            }
+            settings.emailNotifications.events = {
+                ...defaultEvents,
+                ...settings.emailNotifications.events
+            };
+
             // Mark modified for nested objects
             settings.markModified('webhooks');
+            settings.markModified('emailNotifications');
             await settings.save();
         }
 
@@ -153,6 +201,7 @@ router.post('/', auth, async (req, res) => {
         recordingEnabled: joi.boolean().default(true),
         autoAnalysisEnabled: joi.boolean().default(false),
         timeFormat: joi.string().valid('12', '24').default('12'),
+        timeZone: joi.string().min(1).default('UTC'),
         webhooks: joi.object({
             url: joi.string().uri().allow('').default(''),
             enabled: joi.boolean().default(false),
@@ -163,9 +212,31 @@ router.post('/', auth, async (req, res) => {
                 callCompleted: joi.boolean().default(true),
                 leadCreated: joi.boolean().default(true),
                 leadQualified: joi.boolean().default(true),
-                campaignCompleted: joi.boolean().default(true)
+                campaignCompleted: joi.boolean().default(true),
+                appointmentBooked: joi.boolean().default(true),
+                appointmentCanceled: joi.boolean().default(true)
             }).default()
-        }).default()
+        }).default(),
+        emailNotifications: joi.object({
+            enabled: joi.boolean().default(false),
+            brevoKey: joi.string().allow('').default(''),
+            senderEmail: joi.string().email().allow('').default(''),
+            senderName: joi.string().allow('').default(''),
+            recipientEmail: joi.string().email().allow('').default(''),
+            events: joi.object({
+                inboundCall: joi.boolean().default(true),
+                outboundCall: joi.boolean().default(true),
+                callCompleted: joi.boolean().default(true),
+                leadCreated: joi.boolean().default(true),
+                leadQualified: joi.boolean().default(true),
+                campaignCompleted: joi.boolean().default(true),
+                appointmentBooked: joi.boolean().default(true),
+                appointmentCanceled: joi.boolean().default(true)
+            }).default()
+        }).default(),
+        autoHangupEnabled: joi.boolean().default(false),
+        incomingHangupLimit: joi.number().min(0).default(10),
+        outgoingHangupLimit: joi.number().min(0).default(10)
     });
 
     try {
@@ -185,6 +256,20 @@ router.post('/', auth, async (req, res) => {
                 });
             }
             delete updateData.webhooks;
+        }
+
+        if (data.emailNotifications) {
+            if (data.emailNotifications.enabled !== undefined) webhookUpdate['emailNotifications.enabled'] = data.emailNotifications.enabled;
+            if (data.emailNotifications.brevoKey !== undefined) webhookUpdate['emailNotifications.brevoKey'] = data.emailNotifications.brevoKey;
+            if (data.emailNotifications.senderEmail !== undefined) webhookUpdate['emailNotifications.senderEmail'] = data.emailNotifications.senderEmail;
+            if (data.emailNotifications.senderName !== undefined) webhookUpdate['emailNotifications.senderName'] = data.emailNotifications.senderName;
+            if (data.emailNotifications.recipientEmail !== undefined) webhookUpdate['emailNotifications.recipientEmail'] = data.emailNotifications.recipientEmail;
+            if (data.emailNotifications.events) {
+                Object.keys(data.emailNotifications.events).forEach(event => {
+                    webhookUpdate[`emailNotifications.events.${event}`] = data.emailNotifications.events[event];
+                });
+            }
+            delete updateData.emailNotifications;
         }
 
         const settings = await Settings.findOneAndUpdate(
@@ -293,6 +378,27 @@ router.post('/webhooks/test', auth, async (req, res) => {
                     }
                 };
                 break;
+            case 'appointmentBooked':
+                sampleData = {
+                    appointmentId: '707f1f77bcf86cd799439011',
+                    leadId: '507f1f77bcf86cd799439011',
+                    clientName: 'John Doe (Test)',
+                    clientPhone: '+1234567890',
+                    dateTime: new Date(Date.now() + 86400000).toISOString(),
+                    status: 'scheduled',
+                    agentName: 'Appointment Assistant'
+                };
+                break;
+            case 'appointmentCanceled':
+                sampleData = {
+                    appointmentId: '707f1f77bcf86cd799439011',
+                    leadId: '507f1f77bcf86cd799439011',
+                    clientName: 'John Doe (Test)',
+                    clientPhone: '+1234567890',
+                    dateTime: new Date(Date.now() + 86400000).toISOString(),
+                    status: 'canceled'
+                };
+                break;
             default:
                 sampleData = { message: 'This is a custom test event payload' };
         }
@@ -334,6 +440,115 @@ router.post('/webhooks/test', auth, async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// Send test email
+router.post('/email/test', auth, async (req, res) => {
+    const { event } = req.body;
+    if (!event) {
+        return res.status(400).json({ status: 'error', message: 'Event type is required' });
+    }
+
+    try {
+        const settings = await Settings.findOne({ userId: req.user._id });
+        if (!settings || !settings.emailNotifications?.enabled || !settings.emailNotifications?.brevoKey) {
+            return res.status(400).json({ status: 'error', message: 'Email notifications or Brevo API Key not configured' });
+        }
+
+        // Generate sample data
+        let sampleData = {};
+        switch (event) {
+            case 'appointmentBooked':
+                sampleData = {
+                    appointmentId: '707f1f77bcf86cd799439011',
+                    clientName: 'John Doe (Test)',
+                    clientPhone: '+1234567890',
+                    dateTime: new Date(Date.now() + 86400000).toISOString(),
+                    status: 'scheduled',
+                    agentName: 'Appointment Assistant'
+                };
+                break;
+            case 'appointmentCanceled':
+                sampleData = {
+                    appointmentId: '707f1f77bcf86cd799439011',
+                    clientName: 'John Doe (Test)',
+                    clientPhone: '+1234567890',
+                    dateTime: new Date(Date.now() + 86400000).toISOString(),
+                    status: 'canceled'
+                };
+                break;
+            case 'leadCreated':
+                sampleData = {
+                    lead: {
+                        name: 'John Doe (Test)',
+                        phone: '1234567890',
+                        email: 'john@example.com'
+                    }
+                };
+                break;
+            case 'leadQualified':
+                sampleData = {
+                    name: 'John Doe (Test)',
+                    status: 'qualified',
+                    score: 85
+                };
+                break;
+            case 'inboundCall':
+            case 'outboundCall':
+                sampleData = {
+                    phoneNumber: '+1234567890',
+                    direction: event === 'inboundCall' ? 'inbound' : 'outbound'
+                };
+                break;
+            case 'callCompleted':
+                sampleData = {
+                    duration: 45,
+                    status: 'completed',
+                    summary: 'Customer interested in follow-up next week.'
+                };
+                break;
+            default:
+                sampleData = { message: 'This is a test notification' };
+        }
+
+        const EmailService = require('../services/email-service');
+        // We pass true for throwOnError so manual tests show exact errors in UI
+        await EmailService.trigger(req.user._id, event, sampleData, true);
+
+        res.status(200).json({
+            status: 'success',
+            message: `Test email for '${event}' dispatched to ${settings.emailNotifications.recipientEmail}`
+        });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// Verify ElevenLabs API key
+router.post('/elevenlabs/verify', auth, async (req, res) => {
+    const { elevenLabsKey } = req.body;
+    if (!elevenLabsKey) {
+        return res.status(400).json({ status: 'error', message: 'API key is required' });
+    }
+
+    try {
+        const axios = require('axios');
+        await axios.get('https://api.elevenlabs.io/v1/voices', {
+            headers: { 'xi-api-key': elevenLabsKey }
+        });
+
+        res.status(200).json({
+            status: 'success',
+            message: 'API key is valid'
+        });
+    } catch (err) {
+        const status = err.response?.status || 500;
+        const message = status === 401 ? 'Incorrect API Key' : 'Failed to verify API key';
+        res.status(status).json({
+            status: 'error',
+            message
+        });
     }
 });
 

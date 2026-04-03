@@ -4,8 +4,7 @@ const phoneNumberSchema = new mongoose.Schema({
     phoneNumber: {
         type: String,
         required: true,
-        trim: true,
-        unique: true
+        trim: true
     },
     name: {
         type: String,
@@ -45,6 +44,9 @@ const phoneNumberSchema = new mongoose.Schema({
 }, {
     timestamps: true
 });
+
+// Ensure a user can only add the same phone number once
+phoneNumberSchema.index({ phoneNumber: 1, createdBy: 1 }, { unique: true });
 
 const PhoneNumber = mongoose.model('PhoneNumber', phoneNumberSchema);
 

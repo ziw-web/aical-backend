@@ -31,6 +31,12 @@ router.post('/users', auth, isAdmin, async (req, res) => {
         });
 
         await user.save();
+
+        // Create default settings for new user
+        const Settings = require('../models/Settings');
+        const defaultSettings = new Settings({ userId: user._id });
+        await defaultSettings.save();
+
         res.status(201).json({ status: 'success', data: { user } });
     } catch (err) {
         res.status(400).json({ status: 'error', message: err.message });
@@ -51,13 +57,28 @@ router.get('/users', auth, isAdmin, async (req, res) => {
 router.patch('/users/:id/plan', auth, isAdmin, async (req, res) => {
     try {
         const { planId, planExpiry } = req.body;
-        const updateData = {
-            plan: (planId === 'none' || !planId) ? null : planId,
-            planStatus: 'active'
-        };
-        if (planExpiry) updateData.planExpiry = planExpiry;
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
 
-        const user = await User.findByIdAndUpdate(req.params.id, updateData, { new: true }).populate('plan');
+        if (planId === 'none' || !planId) {
+            user.plan = null;
+            user.planStatus = 'trialing';
+            user.planExpiry = undefined;
+        } else {
+            user.plan = planId;
+            user.planStatus = 'active';
+            if (planExpiry) {
+                user.planExpiry = planExpiry;
+            } else {
+                // Default to 1 year from now if no expiry provided
+                const expiry = new Date();
+                expiry.setFullYear(expiry.getFullYear() + 1);
+                user.planExpiry = expiry;
+            }
+        }
+
+        await user.save();
+        await user.populate('plan');
         res.status(200).json({ status: 'success', data: { user } });
     } catch (err) {
         res.status(400).json({ status: 'error', message: err.message });
@@ -68,7 +89,11 @@ router.patch('/users/:id/plan', auth, isAdmin, async (req, res) => {
 router.patch('/users/:id/status', auth, isAdmin, async (req, res) => {
     try {
         const { isActive } = req.body;
-        const user = await User.findByIdAndUpdate(req.params.id, { isActive }, { new: true });
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
+
+        user.isActive = isActive;
+        await user.save();
         res.status(200).json({ status: 'success', data: { user } });
     } catch (err) {
         res.status(400).json({ status: 'error', message: err.message });
@@ -99,7 +124,11 @@ router.post('/plans', auth, isAdmin, async (req, res) => {
 // PATCH /api/admin/plans/:id - Update a plan
 router.patch('/plans/:id', auth, isAdmin, async (req, res) => {
     try {
-        const plan = await Plan.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const plan = await Plan.findById(req.params.id);
+        if (!plan) return res.status(404).json({ status: 'error', message: 'Plan not found' });
+
+        Object.assign(plan, req.body);
+        await plan.save();
         res.status(200).json({ status: 'success', data: { plan } });
     } catch (err) {
         res.status(400).json({ status: 'error', message: err.message });
@@ -294,6 +323,143 @@ router.post('/settings', auth, isAdmin, async (req, res) => {
         res.status(200).json({ status: 'success', data: { settings } });
     } catch (err) {
         res.status(400).json({ status: 'error', message: err.message });
+    }
+});
+
+// --- Branding File Upload ---
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+const BRANDING_DEFAULTS = {
+    logoLight: '/images/logo_black.png',
+    logoDark: '/images/logo_white.png',
+    favicon: '/favicon.ico'
+};
+
+const brandingUploadDir = path.join(__dirname, '..', 'uploads', 'branding');
+if (!fs.existsSync(brandingUploadDir)) {
+    fs.mkdirSync(brandingUploadDir, { recursive: true });
+}
+
+const brandingStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, brandingUploadDir),
+    filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname);
+        const type = req.body.type || 'file';
+        cb(null, `${type}-${Date.now()}${ext}`);
+    }
+});
+
+const brandingUpload = multer({
+    storage: brandingStorage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+    fileFilter: (req, file, cb) => {
+        const allowed = /\.(png|jpg|jpeg|svg|ico|webp)$/i;
+        if (allowed.test(path.extname(file.originalname))) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files (png, jpg, jpeg, svg, ico, webp) are allowed'));
+        }
+    }
+});
+
+// POST /api/admin/branding/upload - Upload a branding asset
+router.post('/branding/upload', auth, isAdmin, brandingUpload.single('file'), async (req, res) => {
+    try {
+        const { type } = req.body;
+        if (!['logoLight', 'logoDark', 'favicon'].includes(type)) {
+            return res.status(400).json({ status: 'error', message: 'Invalid branding type. Must be logoLight, logoDark, or favicon.' });
+        }
+        if (!req.file) {
+            return res.status(400).json({ status: 'error', message: 'No file uploaded.' });
+        }
+
+        const fileUrl = `/uploads/branding/${req.file.filename}`;
+
+        // Delete old uploaded file if exists (don't delete defaults)
+        const settings = await AdminSettings.findOne();
+        const oldPath = settings?.branding?.[type];
+        if (oldPath && oldPath.startsWith('/uploads/')) {
+            const oldFile = path.join(__dirname, '..', oldPath);
+            if (fs.existsSync(oldFile)) fs.unlinkSync(oldFile);
+        }
+
+        await AdminSettings.findOneAndUpdate(
+            {},
+            { $set: { [`branding.${type}`]: fileUrl } },
+            { upsert: true }
+        );
+
+        res.status(200).json({ status: 'success', data: { url: fileUrl } });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// DELETE /api/admin/branding/:type - Delete uploaded branding asset (revert to default)
+router.delete('/branding/:type', auth, isAdmin, async (req, res) => {
+    try {
+        const { type } = req.params;
+        if (!BRANDING_DEFAULTS[type]) {
+            return res.status(400).json({ status: 'error', message: 'Invalid branding type.' });
+        }
+
+        const settings = await AdminSettings.findOne();
+        const currentPath = settings?.branding?.[type];
+
+        // Only delete if it's an uploaded file, not a default
+        if (!currentPath || !currentPath.startsWith('/uploads/')) {
+            return res.status(400).json({ status: 'error', message: 'Cannot delete default branding assets.' });
+        }
+
+        // Delete file from disk
+        const filePath = path.join(__dirname, '..', currentPath);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+        // Reset to default
+        await AdminSettings.findOneAndUpdate(
+            {},
+            { $set: { [`branding.${type}`]: BRANDING_DEFAULTS[type] } }
+        );
+
+        res.status(200).json({ status: 'success', data: { url: BRANDING_DEFAULTS[type] } });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// POST /api/admin/branding/reset - Reset all branding to defaults
+router.post('/branding/reset', auth, isAdmin, async (req, res) => {
+    try {
+        const settings = await AdminSettings.findOne();
+        if (settings?.branding) {
+            // Delete any uploaded files
+            for (const [key, defaultVal] of Object.entries(BRANDING_DEFAULTS)) {
+                const currentPath = settings.branding[key];
+                if (currentPath && currentPath.startsWith('/uploads/')) {
+                    const filePath = path.join(__dirname, '..', currentPath);
+                    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+                }
+            }
+        }
+
+        // Reset all branding fields to defaults
+        const defaultBranding = {
+            appName: 'IntelliCallAI',
+            primaryColor: '#8078F0',
+            ...BRANDING_DEFAULTS
+        };
+
+        await AdminSettings.findOneAndUpdate(
+            {},
+            { $set: { branding: defaultBranding } },
+            { upsert: true }
+        );
+
+        res.status(200).json({ status: 'success', data: { branding: defaultBranding } });
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
     }
 });
 
