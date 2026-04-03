@@ -47,11 +47,6 @@ router.post('/signup', async (req, res) => {
 
         await user.save();
 
-        // Create default settings for new user
-        const Settings = require('../models/Settings');
-        const defaultSettings = new Settings({ userId: user._id });
-        await defaultSettings.save();
-
         const token = jwt.sign({ _id: user._id }, process.env.JWT_SECRET);
 
         res.status(201).json({
@@ -143,7 +138,7 @@ router.patch('/:id', auth, requireAdmin, async (req, res) => {
         const user = await User.findByIdAndUpdate(
             req.params.id,
             { $set: data },
-            { returnDocument: 'after', runValidators: true }
+            { new: true, runValidators: true }
         ).select('-password');
 
         if (!user) {
@@ -162,46 +157,38 @@ router.patch('/:id', auth, requireAdmin, async (req, res) => {
     }
 });
 
-const AdminSettings = require('../models/AdminSettings');
-
 // GET current plan usage
 router.get('/usage', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user._id).populate('plan');
+        if (!user.plan) {
+            return res.status(200).json({
+                status: 'success',
+                data: { usage: null }
+            });
+        }
+
         const userId = user._id;
         const startOfMonth = new Date();
         startOfMonth.setDate(1);
         startOfMonth.setHours(0, 0, 0, 0);
 
-        let limits;
-        const settings = await AdminSettings.findOne() || await AdminSettings.create({});
-        if (!user.plan) {
-            limits = settings.trialLimits;
-        } else {
-            limits = user.plan.limits;
-        }
-
-        const [agents, campaigns, leads, calls] = await Promise.all([
+        const [agents, campaigns, leads] = await Promise.all([
             Agent.countDocuments({ createdBy: userId }),
             Campaign.countDocuments({ createdBy: userId }),
-            Lead.countDocuments({ createdBy: userId }),
-            CallLog.countDocuments({
-                userId: userId,
-                createdAt: { $gte: startOfMonth }
-            })
+            Lead.countDocuments({ createdBy: userId })
         ]);
 
         res.status(200).json({
             status: 'success',
             data: {
-                limits: limits,
+                limits: user.plan.limits,
                 usage: {
                     agents,
                     campaigns,
-                    leads,
-                    calls
-                },
-                isTrial: !user.plan
+                    leads
+                    // No call tracking - BYOK model (users pay for their own API usage)
+                }
             }
         });
     } catch (err) {

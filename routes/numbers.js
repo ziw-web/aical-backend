@@ -1,7 +1,5 @@
 const express = require('express');
 const PhoneNumber = require('../models/PhoneNumber');
-const Agent = require('../models/Agent');
-const SipTrunk = require('../models/SipTrunk');
 const { auth } = require('../middleware/auth');
 const joi = require('joi');
 
@@ -54,20 +52,6 @@ router.post('/', auth, async (req, res) => {
             value.sipTrunkId = null;
         }
 
-        // Ownership validation
-        if (value.inboundAgentId) {
-            const agent = await Agent.findOne({ _id: value.inboundAgentId, createdBy: req.user._id });
-            if (!agent) {
-                return res.status(403).json({ status: 'error', message: 'You do not own this agent' });
-            }
-        }
-        if (value.sipTrunkId) {
-            const trunk = await SipTrunk.findOne({ _id: value.sipTrunkId, createdBy: req.user._id });
-            if (!trunk) {
-                return res.status(403).json({ status: 'error', message: 'You do not own this SIP trunk' });
-            }
-        }
-
         // Validate: SIP numbers must have a trunk
         if (value.provider === 'sip' && !value.sipTrunkId) {
             return res.status(400).json({
@@ -88,7 +72,7 @@ router.post('/', auth, async (req, res) => {
         });
     } catch (err) {
         if (err.code === 11000) {
-            return res.status(400).json({ status: 'error', message: 'You have already added this phone number' });
+            return res.status(400).json({ status: 'error', message: 'Phone number already exists' });
         }
         res.status(400).json({ status: 'error', message: err.message });
     }
@@ -112,22 +96,11 @@ router.patch('/:id', auth, async (req, res) => {
     try {
         if (req.body.phoneNumber) req.body.phoneNumber = req.body.phoneNumber.replace(/\s+/g, '');
         const value = await schema.validateAsync(req.body);
+        if (value.inboundAgentId === '' || value.inboundAgentId === 'none') {
+            value.inboundAgentId = null;
+        }
         if (value.sipTrunkId === '' || value.sipTrunkId === 'none') {
             value.sipTrunkId = null;
-        }
-
-        // Ownership validation
-        if (value.inboundAgentId) {
-            const agent = await Agent.findOne({ _id: value.inboundAgentId, createdBy: req.user._id });
-            if (!agent) {
-                return res.status(403).json({ status: 'error', message: 'You do not own this agent' });
-            }
-        }
-        if (value.sipTrunkId) {
-            const trunk = await SipTrunk.findOne({ _id: value.sipTrunkId, createdBy: req.user._id });
-            if (!trunk) {
-                return res.status(403).json({ status: 'error', message: 'You do not own this SIP trunk' });
-            }
         }
 
         // Validate: SIP numbers must have a trunk
@@ -154,9 +127,6 @@ router.patch('/:id', auth, async (req, res) => {
             data: { number }
         });
     } catch (err) {
-        if (err.code === 11000) {
-            return res.status(400).json({ status: 'error', message: 'You have already added this phone number' });
-        }
         res.status(400).json({ status: 'error', message: err.message });
     }
 });

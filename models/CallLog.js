@@ -55,12 +55,6 @@ const callLogSchema = new mongoose.Schema({
     summary: {
         type: String
     },
-    errors: [{
-        service: { type: String, enum: ['elevenlabs', 'deepgram', 'openrouter', 'twilio', 'system'] },
-        code: String,
-        message: String,
-        timestamp: { type: Date, default: Date.now }
-    }],
     analysis: {
         isQualified: Boolean,
         qualificationScore: Number,

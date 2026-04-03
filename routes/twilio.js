@@ -107,8 +107,8 @@ async function handleVoice(req, res) {
         }
 
         const [agent, lead] = await Promise.all([
-            Agent.findOne({ _id: currentAgentId, createdBy: currentUserId }),
-            Lead.findOne({ _id: currentLeadId, createdBy: currentUserId })
+            Agent.findById(currentAgentId),
+            Lead.findById(currentLeadId)
         ]);
 
         if (!agent || !lead) {
@@ -120,51 +120,6 @@ async function handleVoice(req, res) {
 
         // Handle Inbound Call Recording (Twilio doesn't automatically record inbound unless told)
         const settings = await Settings.findOne({ userId: currentUserId });
-
-        // Auto-hangup timer
-        if (settings?.autoHangupEnabled) {
-            const limit = direction === 'inbound' ? (settings.incomingHangupLimit ?? 10) : (settings.outgoingHangupLimit ?? 10);
-            const hangupMs = limit * 60 * 1000;
-            console.log(`⏳ [Twilio Voice] Auto-hangup (${direction}) scheduled in ${limit} minutes for ${callSid}`);
-
-            // 1-minute warning for inbound
-            if (direction === 'inbound' && limit > 1) {
-                const warningMs = (limit - 1) * 60 * 1000;
-                setTimeout(async () => {
-                    try {
-                        const client = twilio(settings.twilioSid, settings.twilioToken);
-                        const call = await client.calls(callSid).fetch();
-                        if (['in-progress', 'ringing', 'queued'].includes(call.status)) {
-                            console.log(`🔔 [Twilio Voice] Playing 1-minute warning for ${callSid}`);
-                            const host = req.get('host');
-                            const protocol = (host.includes('localhost') || host.includes('127.0.0.1')) ? 'http' : 'https';
-                            const baseUrl = `${protocol}://${host}`;
-                            const resumeUrl = `${baseUrl}/api/twilio/voice?userId=${currentUserId}&agentId=${currentAgentId}&leadId=${currentLeadId}&campaignId=${currentCampaignId || ''}&direction=${direction}`;
-
-                            await client.calls(callSid).update({
-                                twiml: `<Response><Say>This phone call will end in 1 minute.</Say><Redirect>${resumeUrl}</Redirect></Response>`
-                            });
-                        }
-                    } catch (err) {
-                        console.error('[Twilio Voice] Auto-hangup warning failed:', err.message);
-                    }
-                }, warningMs);
-            }
-
-            setTimeout(async () => {
-                try {
-                    const client = twilio(settings.twilioSid, settings.twilioToken);
-                    const call = await client.calls(callSid).fetch();
-                    if (['in-progress', 'ringing', 'queued'].includes(call.status)) {
-                        console.log(`⏰ [Twilio Voice] Auto-hangup (${direction}) triggered for ${callSid}`);
-                        await client.calls(callSid).update({ status: 'completed' });
-                    }
-                } catch (err) {
-                    console.error('[Twilio Voice] Auto-hangup failed:', err.message);
-                }
-            }, hangupMs);
-        }
-
         if (settings?.recordingEnabled && direction === 'inbound') {
             const host = req.get('host');
             const protocol = (host.includes('localhost') || host.includes('127.0.0.1')) ? 'http' : 'https';
@@ -198,6 +153,7 @@ async function handleVoice(req, res) {
             await CallLog.findOneAndUpdate({ callSid }, logData, { upsert: true });
         }
 
+        // Logic check: Custom Streaming (ElevenLabs) vs Standard (Twilio)
         if (agent.useCustomVoice) {
             const host = req.get('host');
             // Force WSS for any non-localhost connection (Twilio requirement)
@@ -217,19 +173,14 @@ async function handleVoice(req, res) {
         } else {
             console.log(`🎙️ [Voice] Standard Voice Enabled. Using traditional TwiML loop.`);
             const personalizedGreeting = replaceVars(agent.openingMessage, lead);
-
-            const langMap = { 'en': 'en-US', 'ar': 'ar-SA', 'hi': 'hi-IN', 'he': 'he-IL', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'pt': 'pt-PT', 'pt-BR': 'pt-BR', 'it': 'it-IT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'ko': 'ko-KR', 'nl': 'nl-NL', 'ur': 'ur-PK', 'ta': 'ta-IN', 'multi': 'en-US' };
-            const twilioLang = langMap[agent.language] || 'en-US';
-
             const gather = response.gather({
                 input: 'speech',
                 speechTimeout: 'auto',
-                language: twilioLang,
                 action: `/api/twilio/process?userId=${currentUserId}&agentId=${currentAgentId}&leadId=${currentLeadId}&campaignId=${currentCampaignId || ''}&direction=${direction}`,
                 method: 'POST',
             });
 
-            gather.say({ voice: agent.voice || 'Polly.Amy', language: twilioLang }, personalizedGreeting);
+            gather.say({ voice: agent.voice || 'Polly.Amy' }, personalizedGreeting);
 
             // Loop if no input
             response.redirect(`/api/twilio/voice?userId=${currentUserId}&agentId=${currentAgentId}&leadId=${currentLeadId}&campaignId=${currentCampaignId || ''}&direction=${direction}`);
@@ -270,7 +221,7 @@ router.post('/process', async (req, res) => {
     try {
         const [settings, agent, callLog] = await Promise.all([
             Settings.findOne({ userId }),
-            Agent.findOne({ _id: agentId, createdBy: userId }),
+            Agent.findById(agentId),
             CallLog.findOne({ callSid })
         ]);
 
@@ -281,25 +232,8 @@ router.post('/process', async (req, res) => {
         }
 
         // Add user message to history
-        const history = (callLog.transcript || []).map(t => ({ role: t.role, content: t.content }));
+        const history = callLog.transcript.map(t => ({ role: t.role, content: t.content }));
         history.push({ role: "user", content: speechResult });
-
-        // Language Instruction
-        let systemPrompt = agent.systemPrompt;
-        if (agent.language && agent.language !== 'en') {
-            if (agent.language === 'multi') {
-                systemPrompt += "\n\nCRITICAL: You are a multilingual assistant. Always respond in the SAME language the user is speaking. If they speak Arabic, Hindi, Hebrew, Portuguese, Italian, Russian, Japanese, Korean, Dutch, Urdu, or Tamil, respond in that language. If they mix languages, you can also mix appropriately but prioritize clarity.";
-            } else {
-                const langMapSimple = { 'ar': 'Arabic', 'hi': 'Hindi', 'he': 'Hebrew', 'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese', 'pt-BR': 'Portuguese (Brazil)', 'it': 'Italian', 'ru': 'Russian', 'ja': 'Japanese', 'ko': 'Korean', 'nl': 'Dutch', 'ur': 'Urdu', 'ta': 'Tamil' };
-                const langName = langMapSimple[agent.language] || agent.language;
-                systemPrompt += `\n\nCRITICAL: Your primary language is ${langName}. Always respond in ${langName} unless the user explicitly asks otherwise.`;
-            }
-        }
-        if (history.length > 0 && history[0].role === 'system') {
-            history[0].content = systemPrompt;
-        } else {
-            history.unshift({ role: 'system', content: systemPrompt });
-        }
 
         // Call OpenRouter
         const llmResponse = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
@@ -327,18 +261,14 @@ router.post('/process', async (req, res) => {
             }
         );
 
-        const langMap = { 'en': 'en-US', 'ar': 'ar-SA', 'hi': 'hi-IN', 'he': 'he-IL', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE', 'pt': 'pt-PT', 'pt-BR': 'pt-BR', 'it': 'it-IT', 'ru': 'ru-RU', 'ja': 'ja-JP', 'ko': 'ko-KR', 'nl': 'nl-NL', 'ur': 'ur-PK', 'ta': 'ta-IN', 'multi': 'en-US' };
-        const twilioLang = langMap[agent.language] || 'en-US';
-
         const gather = response.gather({
             input: 'speech',
             speechTimeout: 'auto',
-            language: twilioLang,
             action: `/api/twilio/process?userId=${userId}&agentId=${agentId}&leadId=${leadId}&campaignId=${campaignId}&direction=${direction || 'outbound'}`,
             method: 'POST',
         });
 
-        gather.say({ voice: agent.voice || 'Polly.Amy', language: twilioLang }, aiReply);
+        gather.say({ voice: agent.voice || 'Polly.Amy' }, aiReply);
 
         // Keep loop alive
         response.redirect(redirectUrl);

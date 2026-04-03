@@ -23,8 +23,8 @@ const planSchema = new mongoose.Schema({
     limits: {
         agents: { type: Number, default: 1 },
         campaigns: { type: Number, default: 1 },
-        leads: { type: Number, default: 100 },
-        callsPerMonth: { type: Number, default: 100 }
+        leads: { type: Number, default: 100 }
+        // Note: No call limits - users bring their own API keys (BYOK model)
     },
     isActive: {
         type: Boolean,

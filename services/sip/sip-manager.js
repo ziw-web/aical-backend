@@ -97,7 +97,7 @@ async function placeCall({ phoneNumber, agent, lead, campaign, userId, testCall 
         console.log(`[SIP] Originating call through trunk...`);
         const destination = lead.phone.startsWith('+') ? lead.phone : `+${lead.phone.replace(/\D/g, '')}`;
         const callChannel = await ariService.originateCall(
-            trunk._id.toString(), destination, trunk.host,
+            trunk._id.toString(), destination,
             {
                 userId, agentId: agent._id.toString(), leadId: lead._id.toString(),
                 campaignId: campaign?._id?.toString() || '',
@@ -119,17 +119,11 @@ async function placeCall({ phoneNumber, agent, lead, campaign, userId, testCall 
                 await channel.answer();
                 const bridge = await ariService.createBridge([emChannel.id, channel.id]);
 
-                // Step 3.3: Start recording via Asterisk (if enabled)
+                // Step 3.3: Start recording via Asterisk
                 try {
-                    const Settings = require('../../models/Settings');
-                    const settings = await Settings.findOne({ userId });
-                    const recordingEnabled = settings?.recordingEnabled !== false;
-
-                    if (recordingEnabled) {
-                        await bridge.record({
-                            name: callId, format: 'wav', beep: false, ifExists: 'overwrite'
-                        });
-                    }
+                    await bridge.record({
+                        name: callId, format: 'wav', beep: false, ifExists: 'overwrite'
+                    });
                 } catch (recErr) {
                     console.warn(`[SIP] Recording failed (non-fatal): ${recErr.message}`);
                 }
@@ -139,22 +133,6 @@ async function placeCall({ phoneNumber, agent, lead, campaign, userId, testCall 
 
                 // Signal the voice stream that the bridge is up — greeting can now be sent
                 voiceStream.setBridgeReady();
-
-                // Auto-hangup timer
-                const Settings = require('../../models/Settings');
-                const settings = await Settings.findOne({ userId });
-                if (settings?.autoHangupEnabled) {
-                    const limit = settings.outgoingHangupLimit ?? 10;
-                    const hangupMs = limit * 60 * 1000;
-                    console.log(`⏳ [SIP Outbound] Auto-hangup scheduled in ${limit} minutes for ${callId}`);
-                    setTimeout(() => {
-                        if (activeCalls.has(callId)) {
-                            console.log(`⏰ [SIP Outbound] Auto-hangup triggered for ${callId}`);
-                            endCall(callId);
-                        }
-                    }, hangupMs);
-                }
-
                 if (testCall && typeof voiceStream.setOnTestComplete === 'function') {
                     voiceStream.setOnTestComplete(() => endCall(callId));
                 }
@@ -315,14 +293,14 @@ async function handleInboundCall(channel, calledNumber, callerNumber) {
         return;
     }
 
-    const userId = phoneConfig.createdBy;
-    const agent = await Agent.findOne({ _id: phoneConfig.inboundAgentId, createdBy: userId });
+    const agent = await Agent.findById(phoneConfig.inboundAgentId);
     if (!agent) {
-        console.error(`[SIP Inbound] Agent not found or not owned by user: ${phoneConfig.inboundAgentId}`);
+        console.error(`[SIP Inbound] Agent not found: ${phoneConfig.inboundAgentId}`);
         try { await channel.hangup(); } catch (_) { }
         return;
     }
 
+    const userId = phoneConfig.createdBy;
     const callId = `sip-${uuidv4()}`;
     const rtpPort = ariService.acquirePort();
 
@@ -358,13 +336,9 @@ async function handleInboundCall(channel, calledNumber, callerNumber) {
         const emChannel = await ariService.createExternalMedia(rtpPort);
         const bridge = await ariService.createBridge([emChannel.id, channel.id]);
 
-        // Step 3.3: Start recording (if enabled)
+        // Step 3.3: Start recording
         try {
-            const Settings = require('../../models/Settings');
-            const settings = await Settings.findOne({ userId });
-            if (settings?.recordingEnabled !== false) {
-                await bridge.record({ name: callId, format: 'wav', beep: false, ifExists: 'overwrite' });
-            }
+            await bridge.record({ name: callId, format: 'wav', beep: false, ifExists: 'overwrite' });
         } catch (recErr) {
             console.warn(`[SIP] Inbound recording failed (non-fatal): ${recErr.message}`);
         }
@@ -374,33 +348,6 @@ async function handleInboundCall(channel, calledNumber, callerNumber) {
 
         // Signal the voice stream that the bridge is up — greeting can now be sent
         voiceStream.setBridgeReady();
-
-        // Auto-hangup timer
-        const Settings = require('../../models/Settings');
-        const settings = await Settings.findOne({ userId });
-        if (settings?.autoHangupEnabled) {
-            const limit = settings.incomingHangupLimit ?? 10;
-            const hangupMs = limit * 60 * 1000;
-            console.log(`⏳ [SIP Inbound] Auto-hangup scheduled in ${limit} minutes for ${callId}`);
-
-            // 1-minute warning for inbound
-            if (limit > 1) {
-                const warningMs = (limit - 1) * 60 * 1000;
-                setTimeout(() => {
-                    if (activeCalls.has(callId)) {
-                        console.log(`🔔 [SIP Inbound] Playing 1-minute warning for ${callId}`);
-                        voiceStream.injectAudioSpeech("This phone call will end in 1 minute.");
-                    }
-                }, warningMs);
-            }
-
-            setTimeout(() => {
-                if (activeCalls.has(callId)) {
-                    console.log(`⏰ [SIP Inbound] Auto-hangup triggered for ${callId}`);
-                    endCall(callId);
-                }
-            }, hangupMs);
-        }
 
         // Step 3.5: Notify dashboard
         emitEvent('sip:call-started', {

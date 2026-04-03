@@ -32,18 +32,13 @@ function encrypt(text) {
  */
 function decrypt(encryptedText) {
     if (!encryptedText) return '';
-    try {
-        const parts = encryptedText.split(':');
-        if (parts.length !== 2) return encryptedText; // Return as-is if not encrypted format
-        const iv = Buffer.from(parts[0], 'hex');
-        const decipher = crypto.createDecipheriv(ALGORITHM, getKey(), iv);
-        let decrypted = decipher.update(parts[1], 'hex', 'utf8');
-        decrypted += decipher.final('utf8');
-        return decrypted;
-    } catch (err) {
-        console.error(`[Encryption] Decryption failed (Key mismatch or corrupted data): ${err.message}`);
-        return ''; // Return empty string to prevent crashing the entire process
-    }
+    const parts = encryptedText.split(':');
+    if (parts.length !== 2) return encryptedText; // Return as-is if not encrypted format
+    const iv = Buffer.from(parts[0], 'hex');
+    const decipher = crypto.createDecipheriv(ALGORITHM, getKey(), iv);
+    let decrypted = decipher.update(parts[1], 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
 }
 
 module.exports = { encrypt, decrypt };

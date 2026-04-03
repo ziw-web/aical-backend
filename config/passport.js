@@ -39,7 +39,7 @@ passport.use(new GoogleStrategy({
 
             // Check if this is the first user
             const userCount = await User.countDocuments();
-            const role = userCount === 0 ? 'admin' : 'user';
+            const role = userCount === 0 ? 'admin' : 'member';
             console.log('Assigning role:', role);
 
             // Create new user
@@ -52,13 +52,6 @@ passport.use(new GoogleStrategy({
 
             await user.save();
             console.log('New user created successfully:', user.email, 'with role:', role);
-
-            // Create default settings for new user
-            const Settings = require('../models/Settings');
-            const defaultSettings = new Settings({ userId: user._id });
-            await defaultSettings.save();
-            console.log('Default settings created for new user:', user.email);
-
             return done(null, user);
         } catch (err) {
             console.error('Passport Google Strategy Error:', err);

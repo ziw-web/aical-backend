@@ -1,13 +1,6 @@
 const mongoose = require('mongoose');
 
 const adminSettingsSchema = new mongoose.Schema({
-    branding: {
-        appName: { type: String, default: 'IntelliCallAI' },
-        primaryColor: { type: String, default: '#8078F0' },
-        logoLight: { type: String, default: '/images/logo_black.png' },
-        logoDark: { type: String, default: '/images/logo_white.png' },
-        favicon: { type: String, default: '/favicon.ico' }
-    },
     currency: {
         type: String,
         default: 'USD'
@@ -40,12 +33,6 @@ const adminSettingsSchema = new mongoose.Schema({
             keyId: { type: String, default: '' },
             keySecret: { type: String, default: '' }
         }
-    },
-    trialLimits: {
-        agents: { type: Number, default: 1 },
-        campaigns: { type: Number, default: 1 },
-        leads: { type: Number, default: 10 },
-        callsPerMonth: { type: Number, default: 5 }
     }
 }, {
     timestamps: true

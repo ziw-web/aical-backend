@@ -101,7 +101,7 @@ router.patch('/bulk/tags', auth, async (req, res) => {
 
     try {
         const { ids, tags } = await schema.validateAsync(req.body);
-        const query = req.user.isSuperAdmin ? { _id: { $in: ids } } : { _id: { $in: ids }, createdBy: req.user._id };
+        const query = req.user.role === 'admin' ? { _id: { $in: ids } } : { _id: { $in: ids }, createdBy: req.user._id };
 
         const result = await Lead.updateMany(
             query,
@@ -164,7 +164,7 @@ router.delete('/bulk', auth, async (req, res) => {
 
     try {
         const { ids } = await schema.validateAsync(req.body);
-        const query = req.user.isSuperAdmin ? { _id: { $in: ids } } : { _id: { $in: ids }, createdBy: req.user._id };
+        const query = req.user.role === 'admin' ? { _id: { $in: ids } } : { _id: { $in: ids }, createdBy: req.user._id };
         const result = await Lead.deleteMany(query);
 
         res.status(200).json({

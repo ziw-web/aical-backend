@@ -41,15 +41,11 @@ const auth = async (req, res, next) => {
         // Grant access to protected route
         req.user = currentUser;
 
-        // If plan has expired, revert user to trial (plan = null)
+        // Auto-check for plan expiry (Don't let this fail the request if it errors, but log it)
         try {
-            if (req.user.plan && req.user.planExpiry && new Date() > new Date(req.user.planExpiry)) {
-                await User.updateOne(
-                    { _id: req.user._id },
-                    { $set: { plan: null, planStatus: 'trialing' } }
-                );
-                req.user.plan = null;
-                req.user.planStatus = 'trialing';
+            if (req.user.plan && req.user.planExpiry && new Date() > req.user.planExpiry && req.user.planStatus === 'active') {
+                req.user.planStatus = 'inactive';
+                await req.user.save();
             }
         } catch (planErr) {
             console.error('Plan expiry update failed:', planErr.message);
@@ -81,7 +77,7 @@ const requireActivePlan = async (req, res, next) => {
     } else {
         res.status(403).json({
             status: 'error',
-            message: 'Please upgrade plan to continue.'
+            message: 'Your subscription has expired or is inactive. Please upgrade to continue.'
         });
     }
 };
